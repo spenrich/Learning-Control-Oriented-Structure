@@ -1,0 +1,9 @@
+casadi ==3.5.6rc2
+dill
+equinox >=0.6.0
+jax >=0.4.1
+jaxtyping
+matplotlib
+numpy
+scipy
+tqdm
