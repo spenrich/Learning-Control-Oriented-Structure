@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Automate generation of test trajectories.
+# Automate generation of training and test trajectories.
 
 # Author: Spencer M. Richards
 #         Autonomous Systems Lab (ASL), Stanford
@@ -8,6 +8,11 @@
 
 for system in PlanarBirotor PlanarSpacecraft
 do
-    echo "system=$system"
-    python data_generation.py $system --seed=151 --num_traj=1000 --freq=100 --zoh
+    # Generate trajectory training data
+    echo "Generating training trajectories (system=$system)"
+    python trajectory_generation.py $system --seed=151 --num_traj=1000 --sim --freq=100 --zoh
+
+    # Generate test trajectories
+    echo "Generating test trajectories (system=$system)"
+    python trajectory_generation.py $system --seed=42 --num_traj=100
 done
