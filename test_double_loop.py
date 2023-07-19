@@ -1,5 +1,5 @@
 """
-TODO.
+Test learned PVTOL controllers on tracking a double loop-the-loop trajectory.
 
 Author: Spencer M. Richards
         Autonomous Systems Lab (ASL), Stanford
@@ -34,8 +34,7 @@ parser.add_argument('seed', help='PRNG seed', type=int)
 parser.add_argument('N', help='training set size', type=int)
 parser.add_argument('--clip_ctrl', help='clip control signal',
                     action='store_true')
-parser.add_argument('--zoh', help='zero-order hold',
-                    action='store_true')
+parser.add_argument('--zoh', help='zero-order hold', action='store_true')
 parser.add_argument('--freq', nargs='?', help='control frequency',
                     type=int, default=150)
 args = parser.parse_args()
@@ -57,7 +56,7 @@ clip_ctrl = args.clip_ctrl
 
 # Construct reference trajectory (double loop)
 def double_loop(t):
-    """TODO."""
+    """Evaluate the position along the double loop trajectory at time `t`."""
     T = 5.      # loop period
     scale = 1.  #
     d = 10.     # displacement along `x` from `t=0` to `t=T`
@@ -71,7 +70,7 @@ def double_loop(t):
 
 
 def flat_to_rot(z, dz, ddz, d3z, d4z, g=9.81):
-    """TODO."""
+    """Convert the differentially flat state to the rotational state."""
     wx, dwx, ddwx = -ddz[0], -d3z[0], -d4z[0]
     wy, dwy, ddwy = ddz[1] + g, d3z[1], d4z[1]
     u0 = jnp.sqrt(wx**2 + wy**2)
@@ -82,7 +81,7 @@ def flat_to_rot(z, dz, ddz, d3z, d4z, g=9.81):
 
 
 def flat_to_state(z, dz, ddz, d3z, d4z, g=9.81):
-    """TODO."""
+    """Convert the differentially flat state to the PVTOL state and input."""
     u0, ϕ, dϕ, ddϕ = flat_to_rot(z, dz, ddz, d3z, d4z, g)
     s = jnp.array([z[0], z[1], ϕ, dz[0], dz[1], dϕ])
     # ds = jnp.array([dz[0], dz[1], dϕ, ddz[0], ddz[1], ddϕ])
@@ -91,7 +90,7 @@ def flat_to_state(z, dz, ddz, d3z, d4z, g=9.81):
 
 
 def reference_func(t, flat_pos, system=system):
-    """TODO."""
+    """Compute a reference pair `(s, u)` at time `t`."""
     g, m, L, J = system.gravity, system.mass, system.length, system.inertia
     vel = jax.jacfwd(flat_pos)
     acc = jax.jacfwd(vel)
@@ -139,7 +138,7 @@ else:
     controllers['LQR (actual)'] = partial(system.tracking_controller, Q=Q, R=R)
 for name, ctrl in controllers.items():
     controllers[name] = eqx.filter_jit(ctrl)
-    _ = controllers[name](x_ref[0, 0], x_ref[0, 0], u_ref[0, 0])
+    _ = controllers[name](x_ref[0], x_ref[0], u_ref[0])
 
 # Set start state at beginning of reference with zero roll and velocity
 x0 = x_ref[0].at[2:].set(0.)
@@ -171,7 +170,7 @@ for a in ax:
     a.set_ylabel(r'$\dfrac{||x(t) - \bar{x}(t)||_2}{||x(0) - \bar{x}(0)||_2}$')
 ax[1].set_xlabel(r'$t$')
 for name, color in zip(controllers, colors):
-    x, xr = sims[name]['x'], sims['reference']['x']
+    x, xr = sims[name]['x'], sims[name]['x_ref']
     ax[0].plot(x[:, 0], x[:, 1], label=name, color=color)
 
     error = jnp.linalg.norm(x - xr, axis=-1)
@@ -184,5 +183,6 @@ ax[-1].legend()
 
 fig.tight_layout()
 
-path = os.path.join('testing', 'PlanarBirotor_DoubleLoop', prefix + '.png')
+path = os.path.join('figures', 'testing', 'PlanarBirotor_DoubleLoop',
+                    prefix + '.png')
 fig.savefig(path, bbox_inches='tight')

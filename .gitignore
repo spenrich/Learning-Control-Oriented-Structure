@@ -1,6 +1,7 @@
 __pycache__
 .ipynb_checkpoints
 .vscode
+train_trajectories
 trained_models
 test_trajectories
 test_results

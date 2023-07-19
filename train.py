@@ -1,5 +1,5 @@
 """
-Train dynamics, controllers and certificates to fit data.
+Train dynamics, controllers, and certificates to fit data.
 
 Author: Spencer M. Richards
         Autonomous Systems Lab (ASL), Stanford
@@ -55,12 +55,19 @@ parser.add_argument('--hidden_depth', nargs='?', help='hidden depth',
 parser.add_argument('--sample_locally',
                     help='sample constraint points locally',
                     action='store_true')
+parser.add_argument('--use_x64', help='use 64-bit precision',
+                    action='store_true')
+parser.add_argument('--use_cpu', help='use CPU only',
+                    action='store_true')
+parser.add_argument('--traj', action='store_true',
+                    help='train on trajectory data')
 args = parser.parse_args()
-prefix = '{}_seed={}_N={}'.format(args.system, args.seed, args.N)
 
 # Configure JAX and set random seed
-# jax.config.update('jax_platform_name', 'cpu')
-# jax.config.update("jax_enable_x64", True)
+if args.use_x64:
+    jax.config.update('jax_enable_x64', True)
+if args.use_cpu:
+    jax.config.update('jax_platform_name', 'cpu')
 key = jax.random.PRNGKey(args.seed)
 
 # Get true dynamics
@@ -77,10 +84,24 @@ N, Nc = args.N, args.Nc
 sample_locally = args.sample_locally
 
 # Regression samples (labelled)
-key, key_x, key_u = jax.random.split(key, 3)
-X = jax.random.uniform(key_x, (N, n), minval=x_min, maxval=x_max)
-U = jax.random.uniform(key_u, (N, m), minval=u_min, maxval=u_max)
-Y = jax.vmap(system)(X, U)
+if args.traj:
+    # Load trajectory data
+    path = os.path.join('train_trajectories', args.system + '.dill')
+    with open(path, 'rb') as file:
+        data = dill.load(file)
+    assert data['num_traj'] >= N
+
+    # Shuffle and select `N` trajectories to form our dataset
+    key, key_traj = jax.random.split(key, 2)
+    idx = jax.random.permutation(key_traj, data['x'].shape[0])[:N]
+    X = jnp.array(data['x'][idx].reshape((-1, n)))
+    U = jnp.array(data['u'][idx].reshape((-1, m)))
+    Y = jnp.array(data['dx'][idx].reshape((-1, n)))
+else:
+    key, key_x, key_u = jax.random.split(key, 3)
+    X = jax.random.uniform(key_x, (N, n), minval=x_min, maxval=x_max)
+    U = jax.random.uniform(key_u, (N, m), minval=u_min, maxval=u_max)
+    Y = jax.vmap(system)(X, U)
 
 # Constraint samples (unlabelled)
 key, key_x, key_u, key_e, key_v = jax.random.split(key, 5)
@@ -91,11 +112,14 @@ Uc = jnp.vstack([
     U, jax.random.uniform(key_u, (Nc, m), minval=u_min, maxval=u_max)
 ])
 if sample_locally:
-    E = jax.random.uniform(key_e, (N + Nc, n), minval=e_min, maxval=e_max)
+    E = jax.random.uniform(key_e, (X.shape[0] + Nc, n),
+                           minval=e_min, maxval=e_max)
     Xc_ref = Xc - E
 else:
-    Xc_ref = jax.random.uniform(key_e, (N + Nc, n), minval=x_min, maxval=x_max)
-Uc_ref = jax.random.uniform(key_v, (N + Nc, m), minval=u_min, maxval=u_max)
+    Xc_ref = jax.random.uniform(key_e, (X.shape[0] + Nc, n),
+                                minval=x_min, maxval=x_max)
+Uc_ref = jax.random.uniform(key_v, (X.shape[0] + Nc, m),
+                            minval=u_min, maxval=u_max)
 
 # Training/validation split and preconditioner
 holdout_frac = args.holdout_frac
@@ -254,6 +278,8 @@ epoch_offset += num_epochs
 # Save hyperparameters and models
 key = key_train  # save PRNG key state from after all epochs
 prefix = 'seed={}_N={}'.format(args.seed, args.N)
+if args.traj:
+    prefix += '_traj'
 for m in models:
     results = {
         'seed':             args.seed,
