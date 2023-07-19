@@ -20,47 +20,7 @@ def get_config(system_name: str, backend: str = 'numpy'):
     module = 'utils.dynamics_' + backend
     cls = getattr(import_module(module), system_name)
 
-    if system_name == 'InvertedPendulum':
-        g, m, L = 9.81, 1., 1.
-        params_dict = {'gravity': g, 'mass': m, 'length': L}
-        labels_x = (r'$\theta$', r'$\dot{\theta}$')
-        labels_u = (r'$\tau$',)
-
-        skip_dim = 1
-        sparse_actuator = True
-        x_ub = np.inf
-        u_ub = 2*m*g*L
-        x_max = np.array([np.pi/3, np.pi/4])
-        u_max = u_ub
-        x_lb, u_lb, x_min, u_min = -x_ub, -u_ub, -x_max, -u_max
-        e_max = 0.5
-        Q, R, T, N = 1., 1e-2, 5., 100
-
-    elif system_name == 'CartPole':
-        g, L, mc, mp = 9.81, 1., 0.1, 0.8
-        params_dict = {'gravity': g, 'length': L,
-                       'mass_cart': mc, 'mass_pendulum': mp}
-        labels_x = (r'$p$', r'$\theta$', r'$\dot{p}$', r'$\dot{\theta}$')
-        labels_u = (r'$u$',)
-
-        skip_dim = 1
-        sparse_actuator = False
-        x_ub = np.inf
-        # u_ub = np.inf
-        u_ub = 20.
-        # x_max = np.array([5., np.pi/2, 2., np.pi/2])
-        # x_max = np.array([10., np.pi/3, 10., np.pi])
-        # x_max = np.array([5., np.pi/2, 2., np.pi/2])
-        # x_max = np.array([5., np.pi/3, 1., np.pi/3])
-        x_max = np.array([1., np.pi/4, 0.5, np.pi/4])
-        # u_max = 100.
-        # u_max = 60.
-        u_max = 20.
-        x_lb, u_lb, x_min, u_min = -x_ub, -u_ub, -x_max, -u_max
-        e_max = 0.5
-        Q, R, T, N = 1., 1e-2, 5., 100
-
-    elif system_name == 'PlanarBirotor':
+    if system_name == 'PlanarBirotor':
         g, m, L, J = 9.81, 0.5, 0.25, 0.005
         params_dict = {'gravity': g, 'mass': m, 'length': L, 'inertia': J}
         labels_x = (r'$p_x$', r'$p_y$', r'$\phi$',
@@ -77,7 +37,6 @@ def get_config(system_name: str, backend: str = 'numpy'):
         x_min = -x_max
         u_min, u_max = m*g/2 - 1., m*g/2 + 1.
         e_max = 0.5
-        Q, R, T, N = 1., 1e-2, 5., 100
 
     elif system_name == 'PlanarSpacecraft':
         m, J, d = 0.5, 0.005, 0.1
@@ -94,7 +53,29 @@ def get_config(system_name: str, backend: str = 'numpy'):
         u_max = u_ub
         x_lb, u_lb, x_min, u_min = -x_ub, -u_ub, -x_max, -u_max
         e_max = 0.2
-        Q, R, T, N = 1., 1e-2, 5., 100
+
+    elif system_name == 'ThreeLinkManipulator':
+        n_dof = 3
+        params_dict = {
+            'lengths':  1.,
+            'masses':   1.,
+            'inertias': 1e-2,
+        }
+        labels_x = (
+            tuple(r'$\theta_{}$'.format(i + 1) for i in range(n_dof))
+            + tuple(r'$\dot\theta_{}$'.format(i + 1) for i in range(n_dof))
+        )
+        labels_u = tuple(r'$\tau_{}$'.format(i + 1) for i in range(n_dof))
+
+        skip_dim = n_dof
+        sparse_actuator = True
+        x_ub = np.array([np.pi, np.pi/2, np.pi/2, np.inf, np.inf, np.inf])
+        u_ub = 20. * np.ones(n_dof)
+        x_max = np.pi / np.array([1., 2., 2., 8., 8., 8.])
+        u_max = u_ub
+        x_lb, u_lb, x_min, u_min = -x_ub, -u_ub, -x_max, -u_max
+        e_max = 0.5
+
     else:
         raise NotImplementedError()
 
@@ -113,11 +94,11 @@ def get_config(system_name: str, backend: str = 'numpy'):
         'u_max':            u_max,            # input upper bound for sampling
         'e_min':            e_min,            # error lower bound for sampling
         'e_max':            e_max,            # error upper bound for sampling
-        'Q':                Q,                # state weight for MPC
-        'R':                R,                # input weight for MPC
-        'T':                T,                # time horizon for MPC
-        'N':                N,                # shooting nodes for MPC
-        'labels_x':         labels_x,         #
-        'labels_u':         labels_u,         #
+        'Q':                1.,               # state weight for MPC
+        'R':                1e-2,             # input weight for MPC
+        'T':                5.,               # time horizon for MPC
+        'N':                100,              # shooting nodes for MPC
+        'labels_x':         labels_x,         # plot labels for states
+        'labels_u':         labels_u,         # plot labels for inputs
     }
     return system, config

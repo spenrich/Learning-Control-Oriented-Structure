@@ -12,6 +12,8 @@ import casadi as cs
 
 import numpy as np
 
+from .dynamics_numpy import Array
+
 
 class Dynamics(ABC):
     """Base class for autonomous continuous-time dynamical systems."""
@@ -179,7 +181,7 @@ class PlanarSpacecraft(Dynamics):
 
     mass:       float = 30.
     inertia:    float = 0.5
-    offset:     np.ndarray = np.array([0.075, 0.075])
+    offset:     Array = np.array([0.075, 0.075])
 
     def __post_init__(self):
         """TODO."""
@@ -239,4 +241,86 @@ class PVTOL(Dynamics):
                          -sφ*u[0] + ε*cφ*u[1],
                          -g + cφ*u[0] + ε*sφ*u[1],
                          u[1]])
+        return f
+
+
+class ThreeLinkManipulator(Dynamics):
+    """Dynamics of a three-link, open-chain manipulator."""
+
+    gravity:    float = 9.81
+    lengths:    Array = np.array([1., 1., 1.])
+    masses:     Array = np.array([1., 1., 1.])
+    inertias:   Array = np.array([1e-2, 1e-2, 1e-2])
+
+    def __post_init__(self):
+        """TODO."""
+        n_dof = 3
+        object.__setattr__(self, 'masses',
+                           np.broadcast_to(self.masses, (n_dof,)))
+        object.__setattr__(self, 'lengths',
+                           np.broadcast_to(self.lengths, (n_dof,)))
+        object.__setattr__(self, 'inertias',
+                           np.broadcast_to(self.inertias, (n_dof,)))
+
+    @property
+    def dims(self) -> tuple[int, int]:
+        """Return the dimensions of the state and input for this system."""
+        return 6, 3
+
+    def dynamics(self, x, u):
+        """Evaluate the dynamics `dx/dt = f(x, u)`."""
+        n_dof = 3
+        g, L, m, J = self.gravity, self.lengths, self.masses, self.inertias
+        r = L/2
+        q, dq = x[:n_dof], x[n_dof:]
+        c, s = cs.cos(q), cs.sin(q)
+        c_12 = cs.cos(q[1] + q[2])
+        s_12 = cs.sin(q[1] + q[2])
+
+        # Mass matrix (inverse)
+        M_00 = (J[0] + J[1] + J[2] + m[1]*(r[0]**2)*(c[1]**2)
+                + m[2]*(L[0]*c[1] + r[1]*c_12)**2)
+        M_11 = (J[1] + J[2] + m[1]*r[0]**2
+                + m[2]*(L[0]**2 + r[1]**2 + 2*L[0]*r[1]*c[2]))
+        M_12 = J[2] + m[2]*r[1]*(r[1] + L[0]*c[2])
+        M_22 = J[2] + m[2]*r[1]**2
+        det = M_11*M_22 - M_12**2
+        M_inv = cs.vcat([
+            cs.hcat([1/M_00, 0.,        0.]),
+            cs.hcat([0.,     M_22/det,  -M_12/det]),
+            cs.hcat([0.,     -M_12/det, M_11/det]),
+        ])
+
+        # Non-zero Christoffel symbols and Coriolis vector
+        C_001 = -(m[1]*(r[0]**2)*c[1]*s[1]
+                  + m[2]*(L[0]*c[1] + r[1]*c_12)*(L[0]*s[1] + r[1]*s_12))/2
+        C_002 = -m[2]*r[1]*s_12*(L[0]*c[1] + r[1]*c_12)/2
+        C_010 = C_001
+        C_020 = C_002
+
+        C_100 = -C_001
+        C_112 = -L[0]*m[2]*r[1]*s[2]/2
+        C_121 = C_112
+        C_122 = C_112
+
+        C_200 = -C_002
+        C_211 = -C_112
+
+        Cdq = cs.vcat([
+            (C_001 + C_010)*dq[0]*dq[1] + (C_002 + C_020)*dq[0]*dq[2],
+            C_100*dq[0]**2 + (C_112 + C_121)*dq[1]*dq[2] + C_122*dq[2]**2,
+            C_200*dq[0]**2 + C_211*dq[1]**2,
+        ])
+
+        # Potential vector
+        dV = -g * cs.vcat([
+            cs.MX(1, 1),
+            (m[1]*r[0] + m[2]*L[0])*c[1] + m[2]*r[1]*c_12,
+            m[2]*r[1]*c_12,
+        ])
+
+        f = cs.vcat([
+            dq,
+            M_inv @ (u - Cdq - dV)
+        ])
         return f

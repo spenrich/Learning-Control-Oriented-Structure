@@ -25,9 +25,11 @@ from tqdm import tqdm
 jax.config.update('jax_platform_name', 'cpu')
 jax.config.update('jax_enable_x64', True)
 
-from utils.dynamics_config import get_config                       # noqa: E402
-from utils.dynamics_numpy import PlanarBirotor, PlanarSpacecraft   # noqa: E402
-from utils.mpc import MPCPlanner                                   # noqa: E402
+from utils.dynamics_config import get_config                # noqa: E402
+from utils.dynamics_numpy import (                          # noqa: E402
+    PlanarBirotor, PlanarSpacecraft, ThreeLinkManipulator
+)
+from utils.mpc import MPCPlanner                            # noqa: E402
 
 # Parse command line arguments
 parser = argparse.ArgumentParser()
@@ -44,9 +46,8 @@ Q, R, T, N = config['Q'], config['R'], config['T'], config['N']
 # Setup MPC planner
 integrator_steps = 1
 num_traj = 100
-planner = MPCPlanner(system, N, integrator_steps,
-                     Q, R, T, x_lb, x_ub, u_lb, u_ub,
-                     dt_max=None, fixed_endpoint=True, backend='casadi')
+planner = MPCPlanner(system, N, integrator_steps, Q, R, T,
+                     x_lb, x_ub, u_lb, u_ub, fixed_endpoint=True)
 
 # Seed RNG for reproducibility, and sample initial states
 n, m = system.dims
@@ -87,8 +88,7 @@ with open(filename, 'wb') as file:
 plt.close('all')
 T = t_mpc.max()
 dt = 0.01
-# t = np.linspace(0., T, int(T/dt) + 1)
-t = np.arange(0., T, dt)
+t = np.arange(0., T + dt, dt)
 
 if isinstance(system, PlanarSpacecraft):
     fig, ax = plt.subplots(3, 3, figsize=(16, 8), sharex=True)
@@ -117,6 +117,7 @@ if isinstance(system, PlanarSpacecraft):
         ax[2, 0].plot(t, u[:, 0])
         ax[2, 1].plot(t, u[:, 1])
         ax[2, 2].plot(t, u[:, 2])
+
 elif isinstance(system, PlanarBirotor):
     fig, ax = plt.subplots(2, 3, figsize=(15, 5))
     ax[0, 0].set_xlabel(r'$x$ [m]')
@@ -153,6 +154,35 @@ elif isinstance(system, PlanarBirotor):
     ax[1, 1].axhline(xc[5]*180/np.pi, c='k', ls='--')
     ax[0, 2].axhline(uc[0]/(m*g), c='k', ls='--')
     ax[1, 2].axhline(uc[1]/(m*g), c='k', ls='--')
+
+elif isinstance(system, ThreeLinkManipulator):
+    n_dof = 3
+    qc, dqc = xc[:n_dof], xc[n_dof:]
+    fig, ax = plt.subplots(3, n_dof, figsize=(16, 8),
+                           sharex=True, sharey='row')
+    for i in range(num_traj):
+        # Linear interpolation, using `(xc, uc)` for extrapolation
+        x_bar = interp1d(t_mpc[i], x_mpc[i], axis=0, bounds_error=False,
+                         fill_value=(x_mpc[i, 0], xc))
+        u_bar = interp1d(t_mpc[i, :-1], u_mpc[i], axis=0, bounds_error=False,
+                         fill_value=(u_mpc[i, 0], uc))
+        x, u = x_bar(t), u_bar(t)
+        q, dq = x[:, :n_dof], x[:, n_dof:]
+        for j in range(n_dof):
+            ax[0, j].plot(t, q[:, j]*180/np.pi)
+            ax[1, j].plot(t, dq[:, j]*180/np.pi)
+            ax[2, j].plot(t, u[:, j])
+
+    for a in ax.ravel():
+        a.set_xlabel(r'$t$ [s]')
+    for j in range(n_dof):
+        ax[0, j].set_ylabel(r'$\theta_{}$ [deg]'.format(j + 1))
+        ax[1, j].set_ylabel(r'$\dot\theta_{}$ [deg/s]'.format(j + 1))
+        ax[2, j].set_ylabel(r'$\tau_{}$ [N$\cdot$m]'.format(j + 1))
+        ax[0, j].axhline(qc[j]*180/np.pi, c='k', ls='--')
+        ax[1, j].axhline(dqc[j]*180/np.pi, c='k', ls='--')
+        ax[2, j].axhline(uc[j], c='k', ls='--')
+
 else:
     raise NotImplementedError()
 

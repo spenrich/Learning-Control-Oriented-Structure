@@ -5,14 +5,16 @@ Author: Spencer M. Richards
         Autonomous Systems Lab (ASL), Stanford
         (GitHub: spenrich)
 """
-from math import isqrt
+from math import inf, isqrt
+
+import equinox as eqx
 
 import jax
 import jax.numpy as jnp
 
 from jaxtyping import Array
 
-from .misc import softplus, softplus_inverse
+from .misc import identity, softplus, softplus_inverse
 
 
 def tri_size(n: int, k: int = 0, m: int | None = None) -> int:
@@ -189,3 +191,46 @@ def posdef_to_params(P: Array, method: str = 'cholesky',
         raise ValueError('Argument `method` must be `cholesky`, `cayley`, '
                          '`householder`, or `matrix_exp`.')
     return θ
+
+
+class PosDefMatrixNN(eqx.Module):
+    """Parametric positive-definite matrix function."""
+
+    input_dim:      int = eqx.static_field()
+    output_dim:     int = eqx.static_field()
+    eig_lower:      float = eqx.static_field()
+    eig_upper:      float = eqx.static_field()
+    nn:             eqx.Module
+
+    def __init__(self,
+                 input_dim:             int,
+                 output_dim:            int,
+                 hidden_width:          int,
+                 hidden_depth:          int,
+                 hidden_activation:     callable,
+                 final_activation:      callable = identity,
+                 eig_lower:             float = 0.,
+                 eig_upper:             float = inf,
+                 *,
+                 key:                   jax.random.PRNGKey):
+        """Initialize; see `PosDefMatrixNN`."""
+        self.input_dim = input_dim
+        self.output_dim = output_dim
+        self.eig_lower = eig_lower
+        self.eig_upper = eig_upper
+        self.nn = eqx.nn.MLP(input_dim, tri_size(output_dim), hidden_width,
+                             hidden_depth, hidden_activation, final_activation,
+                             key=key)
+
+    def __call__(self, x: Array) -> Array:
+        """Evaluate this function."""
+        x = jnp.atleast_1d(x)
+        y = self.nn(x)
+        if self.eig_upper < inf:
+            M = params_to_posdef(y, 'householder',
+                                 self.eig_lower, self.eig_upper)
+        else:
+            M = params_to_posdef(y, 'cholesky')
+            if self.eig_lower >= 0:
+                M += self.eig_lower*jnp.eye(self.output_dim)
+        return M

@@ -14,6 +14,9 @@ from numpy.typing import ArrayLike
 import scipy
 from scipy.integrate import odeint
 
+# Type annotation for NumPy arrays
+Array = ArrayLike
+
 
 def wrap_to_pi(x):
     """Wrap an angle in radians to the interval (-pi, pi]."""
@@ -420,37 +423,31 @@ class PlanarBirotor(SDCDynamics):
                       [L/J, -L/J]])
         return A, B
 
-    def tracking_sdc(self, e, x, u):
+    def tracking_sdc(self, e, x, u, slider=0.):
         """Compute a tracking SDC form of the system dynamics."""
         g, m, L, J = self.gravity, self.mass, self.length, self.inertia
-        φ, dφ, eφ = x[2], x[5], e[2]
+        φ, dφ, eφ, edφ = x[2], x[5], e[2], e[5]
         cφ, sφ = np.cos(φ), np.sin(φ)
         v, w = x[3], x[4]
         ev, ew = e[3], e[4]
-        A = np.zeros((self.dims[0], self.dims[0]))
 
-        # `x`-error state derivative
-        A[0, 2] = (v*cφ - w*sφ)*cosc(eφ) - (v*sφ + w*cφ)*sinc(eφ)
-        A[0, 3] = np.cos(φ + eφ)
-        A[0, 4] = -np.sin(φ + eφ)
-
-        # `y`-error state derivative
-        A[1, 2] = (v*sφ + w*cφ)*cosc(eφ) + (v*cφ - w*sφ)*sinc(eφ)
-        A[1, 3] = np.sin(φ + eφ)
-        A[1, 4] = np.cos(φ + eφ)
-
-        # `phi`-error state derivative
-        A[2, 5] = 1.
-
-        # `v`-error state derivative
-        A[3, 2] = -g*(sφ*cosc(eφ) + cφ*sinc(eφ))
-        A[3, 4] = dφ
-        A[3, 5] = w + ew
-
-        # `w`-error state derivative
-        A[4, 2] = -g*(cφ*cosc(eφ) - sφ*sinc(eφ))
-        A[4, 3] = -dφ
-        A[4, 5] = -(v + ev)
+        A0 = np.array([
+            [0., 0., (v*cφ - w*sφ)*cosc(eφ) - (v*sφ + w*cφ)*sinc(eφ), np.cos(φ + eφ), -np.sin(φ + eφ), 0.],         # noqa: E501
+            [0., 0., (v*sφ + w*cφ)*cosc(eφ) + (v*cφ - w*sφ)*sinc(eφ), np.sin(φ + eφ), np.cos(φ + eφ),  0.],         # noqa: E501
+            [0., 0., 0.,                                              0.,             0.,              1.],         # noqa: E501
+            [0., 0., -g*(sφ*cosc(eφ) + cφ*sinc(eφ)),                  0.,             dφ,              w + ew],     # noqa: E501
+            [0., 0., -g*(cφ*cosc(eφ) - sφ*sinc(eφ)),                  -dφ,            0.,              -(v + ev)],  # noqa: E501
+            [0., 0., 0.,                                              0.,             0.,              0.],         # noqa: E501
+        ])
+        A1 = np.array([
+            [0., 0., (v*cφ - w*sφ)*cosc(eφ) - ((v+ev)*sφ + (w+ew)*cφ)*sinc(eφ), cφ*np.cos(eφ), -sφ*np.cos(eφ), 0.],  # noqa: E501
+            [0., 0., (v*sφ + w*cφ)*cosc(eφ) + ((v+ev)*cφ - (w+ew)*sφ)*sinc(eφ), sφ*np.cos(eφ), cφ*np.cos(eφ),  0.],  # noqa: E501
+            [0., 0., 0.,                                                        0.,            0.,             1.],  # noqa: E501
+            [0., 0., -g*(sφ*cosc(eφ) + cφ*sinc(eφ)),                            0.,            dφ + edφ,       w],   # noqa: E501
+            [0., 0., -g*(cφ*cosc(eφ) - sφ*sinc(eφ)),                            -(dφ + edφ),   0.,             -v],  # noqa: E501
+            [0., 0., 0.,                                                        0.,            0.,             0.],  # noqa: E501
+        ])
+        A = A0 + slider*(A1 - A0)
 
         B = np.array([[0., 0.],
                       [0., 0.],
@@ -460,8 +457,24 @@ class PlanarBirotor(SDCDynamics):
                       [L/J, -L/J]])
         return A, B
 
+    def tracking_controller(self, x, x_bar, u_bar, Q=1., R=1., linearize=False,
+                            slider=0.):
+        """Compute the tracking control input."""
+        n, m = self.dims
+        e = x - x_bar
+        if linearize:
+            A, B = self.tracking_sdc(np.zeros(n), x_bar, u_bar, 0.)
+        else:
+            A, B = self.tracking_sdc(e, x_bar, u_bar, slider)
+        Q = broadcast_to_square_matrix(Q, n)
+        R = broadcast_to_square_matrix(R, m)
+        M = scipy.linalg.solve_continuous_are(A, B, Q, R)
+        dV = M @ e
+        u = u_bar - scipy.linalg.solve(R, B.T @ dV, assume_a='pos')
+        return u
 
-class PlanarSpacecraft(ControlAffineDynamics):
+
+class PlanarSpacecraft(SDCDynamics):
     """Dynamics of a planar spacecraft with an offset center-of-mass."""
 
     mass:       float = 30.
@@ -493,16 +506,54 @@ class PlanarSpacecraft(ControlAffineDynamics):
     def caf(self, x: np.ndarray) -> np.ndarray:
         """Evaluate the terms `(f, B)` for `dx/dt = f(x) + B(x)u`."""
         m, J = self.mass, self.inertia
-        pox, poy = self.offset
+        dx, dy = self.offset
         _, _, _, vx, vy, ω = x
-        f = np.array([vx, vy, ω, (ω**2)*pox/m, (ω**2)*poy/m, 0.])
-        B = np.array([[0.,                 0.,               0.],
-                      [0.,                 0.,               0.],
-                      [0.,                 0.,               0.],
-                      [(1 + (poy**2)/J)/m, -pox*poy/(m*J),   poy/(m*J)],
-                      [-pox*poy/(m*J),     (1 + pox**2/J)/m, -pox/(m*J)],
-                      [poy/J,              -pox/J,           1./J]])
+        f = np.array([vx, vy, ω, (ω**2)*dx/m, (ω**2)*dy/m, 0.])
+        B = np.array([[0.,                0.,              0.],
+                      [0.,                0.,              0.],
+                      [0.,                0.,              0.],
+                      [(1 + (dy**2)/J)/m, -dx*dy/(m*J),    dy/(m*J)],
+                      [-dx*dy/(m*J),      (1 + dx**2/J)/m, -dx/(m*J)],
+                      [dy/J,              -dx/J,           1./J]])
         return f, B
+
+    def sdc(self, x: np.ndarray):
+        """Compute an SDC form of the system dynamics at state `x`."""
+        m, J = self.mass, self.inertia
+        dx, dy = self.offset
+        ω = x[5]
+        A = np.array([[0., 0., 0., 1., 0., 0.],
+                      [0., 0., 0., 0., 1., 0.],
+                      [0., 0., 0., 0., 0., 1.],
+                      [0., 0., 0., 0., 0., 2*dx*ω],
+                      [0., 0., 0., 0., 0., 2*dy*ω],
+                      [0., 0., 0., 0., 0., 0.]]) / m
+        B = np.array([[0.,                0.,              0.],
+                      [0.,                0.,              0.],
+                      [0.,                0.,              0.],
+                      [(1 + (dy**2)/J)/m, -dx*dy/(m*J),    dy/(m*J)],
+                      [-dx*dy/(m*J),      (1 + dx**2/J)/m, -dx/(m*J)],
+                      [dy/J,              -dx/J,           1./J]])
+        return A, B
+
+    def tracking_sdc(self, e, x, u):
+        """Compute a tracking SDC form of the system dynamics."""
+        m, J = self.mass, self.inertia
+        dx, dy = self.offset
+        ω, eω = x[5], e[5]
+        A = np.array([[0., 0., 0., 1., 0., 0.],
+                      [0., 0., 0., 0., 1., 0.],
+                      [0., 0., 0., 0., 0., 1.],
+                      [0., 0., 0., 0., 0., dx*(2*ω + eω)],
+                      [0., 0., 0., 0., 0., dy*(2*ω + eω)],
+                      [0., 0., 0., 0., 0., 0.]]) / m
+        B = np.array([[0.,                0.,              0.],
+                      [0.,                0.,              0.],
+                      [0.,                0.,              0.],
+                      [(1 + (dy**2)/J)/m, -dx*dy/(m*J),    dy/(m*J)],
+                      [-dx*dy/(m*J),      (1 + dx**2/J)/m, -dx/(m*J)],
+                      [dy/J,              -dx/J,           1./J]])
+        return A, B
 
 
 class PVTOL(SDCDynamics):
@@ -569,7 +620,7 @@ class PVTOL(SDCDynamics):
                           [0.,  1.]])
         return A, B
 
-    def caf(self, x: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    def caf(self, x: Array) -> tuple[Array, Array]:
         """Evaluate the terms `(f, B)` for `dx/dt = f(x) + B(x)u`."""
         g = self.gravity
         ε = self.coupling
@@ -643,3 +694,95 @@ class PVTOL(SDCDynamics):
         else:
             raise NotImplementedError()
         return A, B
+
+
+class ThreeLinkManipulator(ControlAffineDynamics):
+    """Dynamics of a three-link, open-chain manipulator."""
+
+    gravity:    float = 9.81
+    lengths:    np.ndarray = np.array([1., 1., 1.])
+    masses:     np.ndarray = np.array([1., 1., 1.])
+    inertias:   np.ndarray = np.array([1e-2, 1e-2, 1e-2])
+
+    def __post_init__(self):
+        """TODO."""
+        n_dof = 3
+        object.__setattr__(self, 'masses',
+                           np.broadcast_to(self.masses, (n_dof,)))
+        object.__setattr__(self, 'lengths',
+                           np.broadcast_to(self.lengths, (n_dof,)))
+        object.__setattr__(self, 'inertias',
+                           np.broadcast_to(self.inertias, (n_dof,)))
+
+    @property
+    def dims(self) -> tuple[int, int]:
+        """Return the dimensions of the state and input for this system."""
+        return 6, 3
+
+    @property
+    def equilibrium(self):
+        """Return an equilibrium pair `(x_bar, u_bar)` for this system."""
+        x_bar = np.zeros(self.state_dim)
+        u_bar = np.zeros(self.control_dim)
+        return x_bar, u_bar
+
+    def caf(self, x: Array) -> tuple[Array, Array]:
+        """Evaluate the terms `(f, B)` for `dx/dt = f(x) + B(x)u`."""
+        n_dof = 3
+        g, L, m, J = self.gravity, self.lengths, self.masses, self.inertias
+        r = L/2
+        q, dq = x[:n_dof], x[n_dof:]
+        c, s = np.cos(q), np.sin(q)
+        c_12 = np.cos(q[1] + q[2])
+        s_12 = np.sin(q[1] + q[2])
+
+        # Mass matrix (inverse)
+        M_00 = (J[0] + J[1] + J[2] + m[1]*(r[0]**2)*(c[1]**2)
+                + m[2]*(L[0]*c[1] + r[1]*c_12)**2)
+        M_11 = (J[1] + J[2] + m[1]*r[0]**2
+                + m[2]*(L[0]**2 + r[1]**2 + 2*L[0]*r[1]*c[2]))
+        M_12 = J[2] + m[2]*r[1]*(r[1] + L[0]*c[2])
+        M_22 = J[2] + m[2]*r[1]**2
+        # M = np.array([
+        #     [M_00, 0.,   0.],
+        #     [0.,   M_11, M_12],
+        #     [0.,   M_12, M_22],
+        # ])
+        det = M_11*M_22 - M_12**2
+        M_inv = np.array([
+            [1/M_00, 0.,        0.],
+            [0.,     M_22/det,  -M_12/det],
+            [0.,     -M_12/det, M_11/det],
+        ])
+
+        # Non-zero Christoffel symbols and Coriolis vector
+        C_001 = -(m[1]*(r[0]**2)*c[1]*s[1]
+                  + m[2]*(L[0]*c[1] + r[1]*c_12)*(L[0]*s[1] + r[1]*s_12))/2
+        C_002 = -m[2]*r[1]*s_12*(L[0]*c[1] + r[1]*c_12)/2
+        C_010 = C_001
+        C_020 = C_002
+
+        C_100 = -C_001
+        C_112 = -L[0]*m[2]*r[1]*s[2]/2
+        C_121 = C_112
+        C_122 = C_112
+
+        C_200 = -C_002
+        C_211 = -C_112
+
+        Cdq = np.array([
+            (C_001 + C_010)*dq[0]*dq[1] + (C_002 + C_020)*dq[0]*dq[2],
+            C_100*dq[0]**2 + (C_112 + C_121)*dq[1]*dq[2] + C_122*dq[2]**2,
+            C_200*dq[0]**2 + C_211*dq[1]**2,
+        ])
+
+        # Potential vector
+        dV = -g * np.array([
+            0.,
+            (m[1]*r[0] + m[2]*L[0])*c[1] + m[2]*r[1]*c_12,
+            m[2]*r[1]*c_12,
+        ])
+
+        f = np.concatenate([dq, -M_inv @ (Cdq + dV)])
+        B = np.vstack([np.zeros((n_dof, n_dof)),  M_inv])
+        return f, B

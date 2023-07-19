@@ -341,7 +341,10 @@ class Crane(Dynamics):
 
 
 class FreemanKokotovic(SDCDynamics):
-    """Dynamics of the scalar system in (Freeman, Kokotovic; 1996).
+    """Dynamics of a scalar system with non-convex value function.
+
+    This system is an example from:
+        Freeman, Kokotovic, "Inverse optimality in robust stabilization", 1996.
 
     This system has a non-convex value function for any quadratic cost.
     """
@@ -755,3 +758,90 @@ class VanDerPolOscillator(SDCDynamics):
         B = jnp.array([[0.],
                        [1.]])
         return A, B
+
+
+class ThreeLinkManipulator(ControlAffineDynamics):
+    """Dynamics of a three-link, open-chain manipulator."""
+
+    gravity:    float = 9.81
+    lengths:    Array = eqx.static_field(default=jnp.array([1., 1., 1.]))
+    masses:     Array = eqx.static_field(default=jnp.array([1., 1., 1.]))
+    inertias:   Array = eqx.static_field(default=jnp.array([1e-2, 1e-2, 1e-2]))
+
+    def __post_init__(self):
+        """TODO."""
+        n_dof = 3
+        object.__setattr__(self, 'masses',
+                           jnp.broadcast_to(self.masses, (n_dof,)))
+        object.__setattr__(self, 'lengths',
+                           jnp.broadcast_to(self.lengths, (n_dof,)))
+        object.__setattr__(self, 'inertias',
+                           jnp.broadcast_to(self.inertias, (n_dof,)))
+
+    @property
+    def dims(self) -> tuple[int, int]:
+        """Return the dimensions of the state and input for this system."""
+        return 6, 3
+
+    @property
+    def equilibrium(self):
+        """Return an equilibrium pair `(x_bar, u_bar)` for this system."""
+        x_bar = jnp.zeros(self.state_dim)
+        u_bar = jnp.zeros(self.control_dim)
+        return x_bar, u_bar
+
+    def caf(self, x: Array) -> tuple[Array, Array]:
+        """Evaluate the terms `(f, B)` for `dx/dt = f(x) + B(x)u`."""
+        n_dof = 3
+        g, L, m, J = self.gravity, self.lengths, self.masses, self.inertias
+        r = L/2
+        q, dq = x[:n_dof], x[n_dof:]
+        c, s = jnp.cos(q), jnp.sin(q)
+        c_12 = jnp.cos(q[1] + q[2])
+        s_12 = jnp.sin(q[1] + q[2])
+
+        # Mass matrix (inverse)
+        M_00 = (J[0] + J[1] + J[2] + m[1]*(r[0]**2)*(c[1]**2)
+                + m[2]*(L[0]*c[1] + r[1]*c_12)**2)
+        M_11 = (J[1] + J[2] + m[1]*r[0]**2
+                + m[2]*(L[0]**2 + r[1]**2 + 2*L[0]*r[1]*c[2]))
+        M_12 = J[2] + m[2]*r[1]*(r[1] + L[0]*c[2])
+        M_22 = J[2] + m[2]*r[1]**2
+        det = M_11*M_22 - M_12**2
+        M_inv = jnp.array([
+            [1/M_00, 0.,        0.],
+            [0.,     M_22/det,  -M_12/det],
+            [0.,     -M_12/det, M_11/det],
+        ])
+
+        # Non-zero Christoffel symbols and Coriolis vector
+        C_001 = -(m[1]*(r[0]**2)*c[1]*s[1]
+                  + m[2]*(L[0]*c[1] + r[1]*c_12)*(L[0]*s[1] + r[1]*s_12))/2
+        C_002 = -m[2]*r[1]*s_12*(L[0]*c[1] + r[1]*c_12)/2
+        C_010 = C_001
+        C_020 = C_002
+
+        C_100 = -C_001
+        C_112 = -L[0]*m[2]*r[1]*s[2]/2
+        C_121 = C_112
+        C_122 = C_112
+
+        C_200 = -C_002
+        C_211 = -C_112
+
+        Cdq = jnp.array([
+            (C_001 + C_010)*dq[0]*dq[1] + (C_002 + C_020)*dq[0]*dq[2],
+            C_100*dq[0]**2 + (C_112 + C_121)*dq[1]*dq[2] + C_122*dq[2]**2,
+            C_200*dq[0]**2 + C_211*dq[1]**2,
+        ])
+
+        # Potential vector
+        dV = -g * jnp.array([
+            0.,
+            (m[1]*r[0] + m[2]*L[0])*c[1] + m[2]*r[1]*c_12,
+            m[2]*r[1]*c_12,
+        ])
+
+        f = jnp.concatenate([dq, -M_inv @ (Cdq + dV)])
+        B = jnp.vstack([jnp.zeros((n_dof, n_dof)),  M_inv])
+        return f, B

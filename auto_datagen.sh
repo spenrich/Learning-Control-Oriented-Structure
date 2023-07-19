@@ -9,5 +9,5 @@
 for system in PlanarBirotor PlanarSpacecraft
 do
     echo "system=$system"
-    python trajectory_generation.py $system
+    python data_generation.py $system --seed=151 --num_traj=1000 --freq=100 --zoh
 done
