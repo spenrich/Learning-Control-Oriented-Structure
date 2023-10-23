@@ -7,17 +7,17 @@ Ensure you are using Python 3. Clone this repository and install the packages li
 
 
 ## Reproducing results
-Trajectory data generation via MPC for both training and testing can be done with the command `./auto_datagen.sh`. This may take a few minutes.
+Trajectory and data generation via MPC for both training and testing can be done with the command `./auto_datagen.sh`. This may take a few minutes.
 
 Model training and testing (for various training set sizes and random seeds) can be done with the command `./auto_traintest.sh`. This will take a long time, so feel free to edit `./auto_traintest.sh` if you just want to try, e.g., a single training set size and seed.
 
 Testing for the planar quadrotor on the double loop-the-loop trajectory can be done with the command `./auto_test_double_loop.sh`.
 
-Finally, the figures in [1] can be reproduced with the command `python plots.py`.
+Finally, the figures in [1] can be reproduced and customized with the [Jupyter](https://jupyter.org/) notebook `plots.ipynb`.
 
 
 ## Citing this work
-Please use the following bibtex entry to cite this work.
+Please use the following BibTex entry to cite this work.
 ```
 @INPROCEEDINGS{RichardsSlotineEtAl2023,
 author      = {Richards, S. M. and Slotine, J.-J. and Azizan, N. and Pavone, M.},
